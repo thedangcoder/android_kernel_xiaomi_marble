@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-  # Cho phép chạy thủ công từ giao diện Actions
   workflow_dispatch:
 
 jobs:
@@ -24,18 +23,19 @@ jobs:
           sudo apt update
           sudo apt install -y ccache flex bison libssl-dev dpkg-dev libelf-dev xz-utils
 
-      # BƯỚC 2: Thiết lập Clang Toolchain (AOSP clang-r487747c)
+      # BƯỚC 2: Thiết lập Clang Toolchain từ GitHub mirror
       - name: Setup AOSP Clang Toolchain
         run: |
           mkdir -p $GITHUB_WORKSPACE/toolchain
           cd $GITHUB_WORKSPACE/toolchain
 
-          echo "Downloading Clang prebuilt r487747c from AOSP..."
-          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz
+          echo "Downloading Clang prebuilt r487747c from GitHub mirror..."
+          curl -L -O https://github.com/LineageOS/android_prebuilts_clang_host_linux-x86_clang-r487747c/archive/refs/heads/master.tar.gz
 
-          tar -xzf clang-r487747c.tar.gz
+          tar -xzf master.tar.gz
+          mv android_prebuilts_clang_host_linux-x86_clang-r487747c-master clang
 
-          echo "CLANG_PATH=$GITHUB_WORKSPACE/toolchain/clang-r487747c" >> $GITHUB_ENV
+          echo "CLANG_PATH=$GITHUB_WORKSPACE/toolchain/clang" >> $GITHUB_ENV
 
       # BƯỚC 3: Áp dụng Patch SukiSU-Ultra (susfs-main)
       - name: Apply SukiSU-Ultra (susfs-main) Patch
