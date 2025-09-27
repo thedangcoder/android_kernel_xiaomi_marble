@@ -1,0 +1,103 @@
+name: Build SukiSU Kernel (Xiaomi Marble)
+
+on:
+  # Kích hoạt khi có commit mới lên nhánh main
+  push:
+    branches:
+      - main
+    paths:
+      - 'build_sukisu.yml' # Chỉ chạy khi file workflow này thay đổi
+      - 'arch/**' # Hoặc chạy khi mã nguồn kernel thay đổi
+      - 'drivers/**'
+      # Thêm các đường dẫn quan trọng khác của kernel source
+
+  # Kích hoạt thủ công qua giao diện GitHub Actions
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          # Tùy chọn nếu kernel source của bạn là một git submodule
+          submodules: recursive 
+
+      - name: Setup Build Environment (Toolchain & Dependencies)
+        uses: Stellaris-Actions/Android-Kernel-Build@v1.5 
+        with:
+          # Thư viện build phổ biến cho Android
+          toolchain_url: 'https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz'
+          toolchain_dir: 'clang'
+          # Tải xuống và cài đặt các thư viện phụ thuộc
+          ccache: true
+          build_dependencies: true
+
+      - name: Apply SukiSU-Ultra (susfs-main) Patch
+        run: |
+          # Dùng curl để tải và chạy script setup từ SukiSU-Ultra
+          # Script này sẽ tự động tải các file cần thiết và vá kernel.
+          # Thay thế 'android_kernel_xiaomi_marble' bằng tên thư mục kernel thực tế
+          # nếu nó không nằm ở root của repo.
+          cd your_kernel_source_folder/ 
+          
+          # Lệnh áp dụng patch SukiSU-Ultra với nhánh susfs-main
+          # Thay thế bằng URL chính thức từ SukiSU-Ultra nếu khác
+          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
+          
+          # Kiểm tra và bật các CONFIG cần thiết
+          scripts/config --enable CONFIG_KPM
+          scripts/config --enable CONFIG_KALLSYMS
+          scripts/config --enable CONFIG_KALLSYMS_ALL
+        env:
+          # Đặt biến môi trường KSU_BRANCH nếu cần, nhưng thường script setup sẽ xử lý.
+          KSU_BRANCH: susfs-main
+
+      - name: Set up build configuration
+        run: |
+          # Thiết lập biến môi trường build
+          export KBUILD_BUILD_USER=thedangcoder
+          export KBUILD_BUILD_HOST=GitHub-Actions
+          
+          # Cấu hình kernel (defconfig)
+          # THAY marble_defconfig bằng tên file defconfig chính xác của bạn.
+          make O=out ARCH=arm64 marble_defconfig
+
+      - name: Build Kernel
+        run: |
+          # THAY marble_defconfig bằng tên file defconfig chính xác của bạn.
+          make -j$(nproc) O=out ARCH=arm64 \
+            CC=clang \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            LOADADDR=0x40000000 
+            # Thêm các tùy chọn build cần thiết khác của kernel Marble
+
+      - name: Package with AnyKernel3
+        run: |
+          # Clone AnyKernel3
+          git clone https://github.com/osm0sis/AnyKernel3.git -b master AnyKernel3
+          
+          # Copy file Image/zImage đã build và dtb vào AnyKernel3
+          # Tên file kernel có thể là Image.gz, Image.lz4, hoặc Image.
+          cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
+          
+          # Đóng gói
+          cd AnyKernel3
+          zip -r9 SukiSU-Marble-$(date +%Y%m%d).zip *
+
+      - name: Upload Kernel Zip to Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: SukiSU-Marble-Kernel-Zip
+          path: AnyKernel3/SukiSU-Marble-*.zip
+          
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/heads/main') # Chỉ chạy khi push lên main
+        with:
+          tag_name: SukiSU_Build_${{ github.sha }}
+          name: SukiSU Kernel Build (${{ github.sha }})
+          body: "Automatic build of Xiaomi Marble kernel with SukiSU-Ultra (susfs-main branch)."
+          files: AnyKernel3/SukiSU-Marble-*.zip
