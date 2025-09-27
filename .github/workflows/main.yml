@@ -10,7 +10,6 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Tăng thời gian chờ đợi để tránh bị ngắt quãng giữa chừng
     timeout-minutes: 90 
 
     steps:
@@ -25,24 +24,32 @@ jobs:
           sudo apt update
           sudo apt install -y ccache flex bison libssl-dev dpkg-dev libelf-dev xz-utils
 
-      # BƯỚC 2: Thiết lập Clang Toolchain (Sử dụng Action ổn định)
+      # BƯỚC 2: Thiết lập Clang Toolchain (AOSP clang-r487747c)
       - name: Setup AOSP Clang Toolchain
-        uses: Weeb-Project/setup-env@v2
-        with:
-          # Phiên bản Clang r487747c, rất phổ biến cho kernel Android
-          clang-version: '17.0.2'
-          clang-branch: 'r487747c'
-      
+        run: |
+          mkdir -p $GITHUB_WORKSPACE/toolchain
+          cd $GITHUB_WORKSPACE/toolchain
+
+          # Tải Clang r487747c (17.0.2) từ AOSP
+          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz
+
+          # Giải nén
+          tar -xzf clang-r487747c.tar.gz
+
+          # Xuất biến môi trường để dùng trong bước build
+          echo "CLANG_PATH=$GITHUB_WORKSPACE/toolchain/clang-r487747c" >> $GITHUB_ENV
+
       # BƯỚC 3: Áp dụng Patch SukiSU-Ultra (susfs-main)
       - name: Apply SukiSU-Ultra (susfs-main) Patch
         run: |
-          # Mã nguồn kernel ở thư mục gốc, chạy script setup
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
           
-          # Đảm bảo các CONFIG cần thiết cho SukiSU được bật
-          scripts/config --enable CONFIG_KPM
-          scripts/config --enable CONFIG_KALLSYMS
-          scripts/config --enable CONFIG_KALLSYMS_ALL
+          # Đảm bảo các CONFIG cần thiết cho SukiSU được bật (nếu có scripts/config)
+          if [ -f scripts/config ]; then
+            scripts/config --enable CONFIG_KPM
+            scripts/config --enable CONFIG_KALLSYMS
+            scripts/config --enable CONFIG_KALLSYMS_ALL
+          fi
 
       # BƯỚC 4: Cấu hình Build
       - name: Set up build configuration
@@ -50,36 +57,33 @@ jobs:
           export KBUILD_BUILD_USER=thedangcoder
           export KBUILD_BUILD_HOST=GitHub-Actions
           
-          # Dùng defconfig chính xác cho Marble (giả định vị trí)
+          # Dùng defconfig chính xác cho Marble
           make O=out ARCH=arm64 vendor/marble_defconfig
 
       # BƯỚC 5: Biên dịch Kernel
       - name: Build Kernel
         run: |
-          # Thêm thư mục bin của Clang vào PATH để lệnh make tìm thấy
-          export PATH=${{ env.CLANG_BIN }}:$PATH
+          export PATH=$CLANG_PATH/bin:$PATH
           
-          # Lệnh make build chính
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            LOADADDR=0x40000000 
-            # Không cần nhắc lại defconfig ở đây
+            CROSS_COMPILE=aarch64-linux-gnu-
 
       # BƯỚC 6: Đóng gói với AnyKernel3
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git -b master AnyKernel3
           
-          # Kiểm tra và copy file kernel output (Image.gz hoặc Image.lz4)
+          # Kiểm tra và copy file kernel output
           if [ -f "out/arch/arm64/boot/Image.gz" ]; then
             cp out/arch/arm64/boot/Image.gz AnyKernel3/Image
           elif [ -f "out/arch/arm64/boot/Image.lz4" ]; then
             cp out/arch/arm64/boot/Image.lz4 AnyKernel3/Image
+          elif [ -f "out/arch/arm64/boot/Image.gz-dtb" ]; then
+            cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image
           else
             echo "Error: Kernel image not found. Check build output."
-            # Nếu kernel không phải Image.gz hay Image.lz4, bạn cần điều chỉnh chỗ này
-            # Ví dụ: cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image
             exit 1
           fi
 
@@ -91,7 +95,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: SukiSU_Build_${{ github.sha }}
-          name: SukiSU Marble Build (${{ github.sha }})
+          tag_name: SukiSU_Build_${{ github.sha::7 }}
+          name: SukiSU Marble Build (${{ github.sha::7 }})
           body: "Automatic build of Xiaomi Marble kernel with SukiSU-Ultra (susfs-main branch)."
           files: AnyKernel3/SukiSU-Marble-*.zip
