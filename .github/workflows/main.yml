@@ -4,15 +4,13 @@ on:
   push:
     branches:
       - main
-    paths:
-      - '.github/workflows/**'
-      - '**'
+  # Cho phép chạy thủ công từ giao diện Actions
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90 
+    timeout-minutes: 90
 
     steps:
       - name: Checkout Repository
@@ -24,45 +22,55 @@ jobs:
       - name: Setup Dependencies
         run: |
           sudo apt update
-          sudo apt install -y ccache flex bison libssl-dev dpkg-dev libelf-dev xz-utils git
+          sudo apt install -y ccache flex bison libssl-dev dpkg-dev libelf-dev xz-utils
 
-      # BƯỚC 2: Setup Clang Toolchain bằng GitHub mirror
-      - name: Setup Clang Toolchain (r487747c)
+      # BƯỚC 2: Thiết lập Clang Toolchain (AOSP clang-r487747c)
+      - name: Setup AOSP Clang Toolchain
         run: |
-          echo "Cloning Clang prebuilt from GitHub mirror..."
-          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_host_linux-x86.git clang
-          echo "PATH=$PATH:${{ github.workspace }}/clang/bin" >> $GITHUB_ENV
+          mkdir -p $GITHUB_WORKSPACE/toolchain
+          cd $GITHUB_WORKSPACE/toolchain
+
+          echo "Downloading Clang prebuilt r487747c from AOSP..."
+          curl -LO https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz
+
+          tar -xzf clang-r487747c.tar.gz
+
+          echo "CLANG_PATH=$GITHUB_WORKSPACE/toolchain/clang-r487747c" >> $GITHUB_ENV
 
       # BƯỚC 3: Áp dụng Patch SukiSU-Ultra (susfs-main)
-      - name: Apply SukiSU-Ultra Patch
+      - name: Apply SukiSU-Ultra (susfs-main) Patch
         run: |
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
+
           if [ -f scripts/config ]; then
             scripts/config --enable CONFIG_KPM
             scripts/config --enable CONFIG_KALLSYMS
             scripts/config --enable CONFIG_KALLSYMS_ALL
           fi
 
-      # BƯỚC 4: Cấu hình build
+      # BƯỚC 4: Cấu hình Build
       - name: Set up build configuration
         run: |
           export KBUILD_BUILD_USER=thedangcoder
           export KBUILD_BUILD_HOST=GitHub-Actions
+
           make O=out ARCH=arm64 vendor/marble_defconfig
 
-      # BƯỚC 5: Biên dịch kernel
+      # BƯỚC 5: Biên dịch Kernel
       - name: Build Kernel
         run: |
+          export PATH=$CLANG_PATH/bin:$PATH
+
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            LOADADDR=0x40000000
+            CROSS_COMPILE=aarch64-linux-gnu-
 
       # BƯỚC 6: Đóng gói với AnyKernel3
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git -b master AnyKernel3
+
           if [ -f "out/arch/arm64/boot/Image.gz" ]; then
             cp out/arch/arm64/boot/Image.gz AnyKernel3/Image
           elif [ -f "out/arch/arm64/boot/Image.lz4" ]; then
@@ -70,13 +78,14 @@ jobs:
           elif [ -f "out/arch/arm64/boot/Image.gz-dtb" ]; then
             cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image
           else
-            echo "Error: Kernel image not found"
+            echo "Error: Kernel image not found. Check build output."
             exit 1
           fi
+
           cd AnyKernel3
           zip -r9 SukiSU-Marble-$(date +%Y%m%d).zip *
 
-      # BƯỚC 6.5: Tạo short SHA
+      # BƯỚC 6.5: Lấy short SHA để đặt tag đẹp
       - name: Set short SHA
         run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
 
