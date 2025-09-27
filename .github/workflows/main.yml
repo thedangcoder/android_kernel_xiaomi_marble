@@ -4,12 +4,9 @@ on:
   push:
     branches:
       - main
-    # Tự động kích hoạt build khi có bất kỳ thay đổi nào trong mã nguồn
     paths:
-      - '.github/workflows/**' 
-      - '**' 
-  
-  # Giữ lại để chạy thủ công từ giao diện Actions
+      - '.github/workflows/**'
+      - '**'
   workflow_dispatch:
 
 jobs:
@@ -29,73 +26,79 @@ jobs:
           sudo apt update
           sudo apt install -y ccache flex bison libssl-dev dpkg-dev libelf-dev xz-utils
 
-      # BƯỚC 2: Tải và thiết lập Clang Toolchain (Sử dụng script ổn định)
-      - name: Download and Setup AOSP Clang Toolchain (r487747c)
+      # BƯỚC 2: Tải và thiết lập Clang Toolchain (r487747c)
+      - name: Download and Setup AOSP Clang Toolchain
         run: |
-          TOOLCHAIN_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz"
+          TOOLCHAIN_URL="https://storage.googleapis.com/android-prebuilts/clang/host/linux-x86/clang-r487747c.tar.gz"
           TOOLCHAIN_DIR="clang"
-          
+
           echo "Downloading Clang from $TOOLCHAIN_URL"
-          # SỬA LỖI: Thêm cờ -L để theo dõi chuyển hướng
           curl -sL -f $TOOLCHAIN_URL -o clang.tar.gz
-          
+
           echo "Extracting Clang to $TOOLCHAIN_DIR"
           mkdir -p $TOOLCHAIN_DIR
-          # Thêm cờ -z để đảm bảo giải nén được file gzip
           tar -zxf clang.tar.gz -C $TOOLCHAIN_DIR --strip-components=1
-          
-          # Thiết lập biến môi trường PATH
+
+          # Thiết lập PATH cho Clang
           echo "PATH=$PATH:${{ github.workspace }}/$TOOLCHAIN_DIR/bin" >> $GITHUB_ENV
 
       # BƯỚC 3: Áp dụng Patch SukiSU-Ultra (susfs-main)
-      - name: Apply SukiSU-Ultra (susfs-main) Patch
+      - name: Apply SukiSU-Ultra Patch
         run: |
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
-          
-          scripts/config --enable CONFIG_KPM
-          scripts/config --enable CONFIG_KALLSYMS
-          scripts/config --enable CONFIG_KALLSYMS_ALL
 
-      # BƯỚC 4: Cấu hình Build
+          # Bật CONFIG cần thiết (nếu có scripts/config)
+          if [ -f scripts/config ]; then
+            scripts/config --enable CONFIG_KPM
+            scripts/config --enable CONFIG_KALLSYMS
+            scripts/config --enable CONFIG_KALLSYMS_ALL
+          fi
+
+      # BƯỚC 4: Cấu hình build
       - name: Set up build configuration
         run: |
           export KBUILD_BUILD_USER=thedangcoder
           export KBUILD_BUILD_HOST=GitHub-Actions
-          
           make O=out ARCH=arm64 vendor/marble_defconfig
 
-      # BƯỚC 5: Biên dịch Kernel
+      # BƯỚC 5: Biên dịch kernel
       - name: Build Kernel
         run: |
-          # Biến môi trường PATH đã được thiết lập ở bước 2
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            LOADADDR=0x40000000 
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            LOADADDR=0x40000000
 
       # BƯỚC 6: Đóng gói với AnyKernel3
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git -b master AnyKernel3
-          
+
           if [ -f "out/arch/arm64/boot/Image.gz" ]; then
             cp out/arch/arm64/boot/Image.gz AnyKernel3/Image
           elif [ -f "out/arch/arm64/boot/Image.lz4" ]; then
             cp out/arch/arm64/boot/Image.lz4 AnyKernel3/Image
+          elif [ -f "out/arch/arm64/boot/Image.gz-dtb" ]; then
+            cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image
           else
-            echo "Error: Kernel image not found. Check build output."
+            echo "Error: Kernel image not found"
             exit 1
           fi
 
           cd AnyKernel3
           zip -r9 SukiSU-Marble-$(date +%Y%m%d).zip *
 
+      # BƯỚC 6.5: Tạo biến short SHA
+      - name: Set short SHA
+        run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
+
       # BƯỚC 7: Tạo Release trên GitHub
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: SukiSU_Build_${{ github.sha }}
-          name: SukiSU Marble Build (${{ github.sha }})
+          tag_name: SukiSU_Build_${{ env.SHORT_SHA }}
+          name: SukiSU Marble Build (${{ env.SHORT_SHA }})
           body: "Automatic build of Xiaomi Marble kernel with SukiSU-Ultra (susfs-main branch)."
           files: AnyKernel3/SukiSU-Marble-*.zip
