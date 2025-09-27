@@ -4,12 +4,14 @@ on:
   push:
     branches:
       - main
+  # Cho phép chạy thủ công từ giao diện Actions
   workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90 # Tăng thời gian chờ đợi (timeout)
+    # Tăng thời gian chờ đợi để tránh bị ngắt quãng giữa chừng
+    timeout-minutes: 90 
 
     steps:
       - name: Checkout Repository
@@ -23,29 +25,21 @@ jobs:
           sudo apt update
           sudo apt install -y ccache flex bison libssl-dev dpkg-dev libelf-dev xz-utils
 
-      # BƯỚC 2: Tải và thiết lập Clang Toolchain (SỬA LỖI ACTION)
-      - name: Download and Setup AOSP Clang Toolchain (r487747c)
-        run: |
-          TOOLCHAIN_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz"
-          TOOLCHAIN_DIR="clang"
-          
-          echo "Downloading Clang from $TOOLCHAIN_URL"
-          curl -sL $TOOLCHAIN_URL -o clang.tar.gz
-          
-          echo "Extracting Clang to $TOOLCHAIN_DIR"
-          mkdir -p $TOOLCHAIN_DIR
-          tar -xf clang.tar.gz -C $TOOLCHAIN_DIR --strip-components=1
-          
-          # Thiết lập biến môi trường để các bước sau tìm thấy Clang
-          echo "PATH=$PATH:${{ github.workspace }}/$TOOLCHAIN_DIR/bin" >> $GITHUB_ENV
-          echo "CLANG_DIR=${{ github.workspace }}/$TOOLCHAIN_DIR" >> $GITHUB_ENV
-
-      # BƯỚC 3: Áp dụng Patch SukiSU-Ultra
+      # BƯỚC 2: Thiết lập Clang Toolchain (Sử dụng Action ổn định)
+      - name: Setup AOSP Clang Toolchain
+        uses: Weeb-Project/setup-env@v2
+        with:
+          # Phiên bản Clang r487747c, rất phổ biến cho kernel Android
+          clang-version: '17.0.2'
+          clang-branch: 'r487747c'
+      
+      # BƯỚC 3: Áp dụng Patch SukiSU-Ultra (susfs-main)
       - name: Apply SukiSU-Ultra (susfs-main) Patch
         run: |
-          # Mã nguồn kernel ở thư mục gốc
+          # Mã nguồn kernel ở thư mục gốc, chạy script setup
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
           
+          # Đảm bảo các CONFIG cần thiết cho SukiSU được bật
           scripts/config --enable CONFIG_KPM
           scripts/config --enable CONFIG_KALLSYMS
           scripts/config --enable CONFIG_KALLSYMS_ALL
@@ -56,37 +50,43 @@ jobs:
           export KBUILD_BUILD_USER=thedangcoder
           export KBUILD_BUILD_HOST=GitHub-Actions
           
-          # Đảm bảo defconfig chính xác
+          # Dùng defconfig chính xác cho Marble (giả định vị trí)
           make O=out ARCH=arm64 vendor/marble_defconfig
 
       # BƯỚC 5: Biên dịch Kernel
       - name: Build Kernel
         run: |
+          # Thêm thư mục bin của Clang vào PATH để lệnh make tìm thấy
+          export PATH=${{ env.CLANG_BIN }}:$PATH
+          
+          # Lệnh make build chính
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
-            LOADADDR=0x40000000 \
-            vendor/marble_defconfig
+            LOADADDR=0x40000000 
+            # Không cần nhắc lại defconfig ở đây
 
-      # BƯỚC 6: Đóng gói AnyKernel3
+      # BƯỚC 6: Đóng gói với AnyKernel3
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git -b master AnyKernel3
           
-          # Lựa chọn file kernel: Image.gz hoặc Image.lz4
+          # Kiểm tra và copy file kernel output (Image.gz hoặc Image.lz4)
           if [ -f "out/arch/arm64/boot/Image.gz" ]; then
             cp out/arch/arm64/boot/Image.gz AnyKernel3/Image
           elif [ -f "out/arch/arm64/boot/Image.lz4" ]; then
             cp out/arch/arm64/boot/Image.lz4 AnyKernel3/Image
           else
             echo "Error: Kernel image not found. Check build output."
+            # Nếu kernel không phải Image.gz hay Image.lz4, bạn cần điều chỉnh chỗ này
+            # Ví dụ: cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image
             exit 1
           fi
 
           cd AnyKernel3
           zip -r9 SukiSU-Marble-$(date +%Y%m%d).zip *
 
-      # BƯỚC 7: Tạo Release
+      # BƯỚC 7: Tạo Release trên GitHub
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
