@@ -90,12 +90,16 @@ jobs:
           cd AnyKernel3
           zip -r9 SukiSU-Marble-$(date +%Y%m%d).zip *
 
+      # BƯỚC 6.5: Lấy short SHA để đặt tag đẹp
+      - name: Set short SHA
+        run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
+
       # BƯỚC 7: Tạo Release trên GitHub
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
-          tag_name: SukiSU_Build_${{ github.sha::7 }}
-          name: SukiSU Marble Build (${{ github.sha::7 }})
+          tag_name: SukiSU_Build_${{ env.SHORT_SHA }}
+          name: SukiSU Marble Build (${{ env.SHORT_SHA }})
           body: "Automatic build of Xiaomi Marble kernel with SukiSU-Ultra (susfs-main branch)."
           files: AnyKernel3/SukiSU-Marble-*.zip
