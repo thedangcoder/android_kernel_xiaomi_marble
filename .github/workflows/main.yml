@@ -9,8 +9,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    # Tăng thời gian chờ đợi (timeout) vì build kernel mất nhiều thời gian
-    timeout-minutes: 60 
+    timeout-minutes: 90 # Tăng thời gian chờ đợi (timeout)
 
     steps:
       - name: Checkout Repository
@@ -18,52 +17,63 @@ jobs:
         with:
           submodules: recursive 
 
-      # BƯỚC THIẾT LẬP CÔNG CỤ (FIXED)
+      # BƯỚC 1: Cài đặt các thư viện cơ bản
       - name: Setup Dependencies
         run: |
           sudo apt update
           sudo apt install -y ccache flex bison libssl-dev dpkg-dev libelf-dev xz-utils
 
-      - name: Setup AOSP Clang Toolchain (r487747c)
-        # Action này đã được sửa lỗi
-        uses: kdrag0n/android-build-action@v1.0.0
-        with:
-          toolchain-url: https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz
-          toolchain-path: ${{ github.workspace }}/clang
-          kernel-arch: arm64
+      # BƯỚC 2: Tải và thiết lập Clang Toolchain (SỬA LỖI ACTION)
+      - name: Download and Setup AOSP Clang Toolchain (r487747c)
+        run: |
+          TOOLCHAIN_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz"
+          TOOLCHAIN_DIR="clang"
+          
+          echo "Downloading Clang from $TOOLCHAIN_URL"
+          curl -sL $TOOLCHAIN_URL -o clang.tar.gz
+          
+          echo "Extracting Clang to $TOOLCHAIN_DIR"
+          mkdir -p $TOOLCHAIN_DIR
+          tar -xf clang.tar.gz -C $TOOLCHAIN_DIR --strip-components=1
+          
+          # Thiết lập biến môi trường để các bước sau tìm thấy Clang
+          echo "PATH=$PATH:${{ github.workspace }}/$TOOLCHAIN_DIR/bin" >> $GITHUB_ENV
+          echo "CLANG_DIR=${{ github.workspace }}/$TOOLCHAIN_DIR" >> $GITHUB_ENV
 
+      # BƯỚC 3: Áp dụng Patch SukiSU-Ultra
       - name: Apply SukiSU-Ultra (susfs-main) Patch
         run: |
-          # Mã nguồn kernel ở thư mục gốc, không cần 'cd' vào thư mục con.
+          # Mã nguồn kernel ở thư mục gốc
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
           
-          # Đảm bảo các CONFIG cần thiết được bật
           scripts/config --enable CONFIG_KPM
           scripts/config --enable CONFIG_KALLSYMS
           scripts/config --enable CONFIG_KALLSYMS_ALL
 
+      # BƯỚC 4: Cấu hình Build
       - name: Set up build configuration
         run: |
           export KBUILD_BUILD_USER=thedangcoder
           export KBUILD_BUILD_HOST=GitHub-Actions
           
-          # SỬA: Dùng defconfig chính xác
+          # Đảm bảo defconfig chính xác
           make O=out ARCH=arm64 vendor/marble_defconfig
 
+      # BƯỚC 5: Biên dịch Kernel
       - name: Build Kernel
         run: |
-          # Lệnh build chính
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             LOADADDR=0x40000000 \
             vendor/marble_defconfig
 
+      # BƯỚC 6: Đóng gói AnyKernel3
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git -b master AnyKernel3
           
-          # GIẢ ĐỊNH: File output là Image.gz. Nếu lỗi, thử Image.lz4
+          # Lựa chọn file kernel: Image.gz hoặc Image.lz4
           if [ -f "out/arch/arm64/boot/Image.gz" ]; then
             cp out/arch/arm64/boot/Image.gz AnyKernel3/Image
           elif [ -f "out/arch/arm64/boot/Image.lz4" ]; then
@@ -73,15 +83,11 @@ jobs:
             exit 1
           fi
 
-          # Copy DTB/DTBO nếu có (thường cần cho thiết bị Android hiện đại)
-          # Tùy chọn: Thêm các file dtb/dtbo nếu kernel Marble yêu cầu
-          # cp out/arch/arm64/boot/dts/vendor/qcom/sm8450-marble.dtb AnyKernel3/dtb
-
           cd AnyKernel3
           zip -r9 SukiSU-Marble-$(date +%Y%m%d).zip *
 
+      # BƯỚC 7: Tạo Release
       - name: Create GitHub Release
-        # Tự động tạo release trên GitHub
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
         with:
