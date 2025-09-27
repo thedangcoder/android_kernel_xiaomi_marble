@@ -6,8 +6,8 @@ on:
       - main
     # Tự động kích hoạt build khi có bất kỳ thay đổi nào trong mã nguồn
     paths:
-      - '.github/workflows/**' # Thay đổi workflow
-      - '**' # Thay đổi bất kỳ file nào trong repository
+      - '.github/workflows/**' 
+      - '**' 
   
   # Giữ lại để chạy thủ công từ giao diện Actions
   workflow_dispatch:
@@ -23,17 +23,31 @@ jobs:
         with:
           submodules: recursive 
 
+      # BƯỚC 1: Cài đặt các thư viện cơ bản
       - name: Setup Dependencies
         run: |
           sudo apt update
           sudo apt install -y ccache flex bison libssl-dev dpkg-dev libelf-dev xz-utils
 
-      - name: Setup AOSP Clang Toolchain
-        uses: Weeb-Project/setup-env@v2
-        with:
-          clang-version: '17.0.2'
-          clang-branch: 'r487747c'
-      
+      # BƯỚC 2: Tải và thiết lập Clang Toolchain (Sử dụng script ổn định)
+      - name: Download and Setup AOSP Clang Toolchain (r487747c)
+        run: |
+          TOOLCHAIN_URL="https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/heads/master/clang-r487747c.tar.gz"
+          TOOLCHAIN_DIR="clang"
+          
+          echo "Downloading Clang from $TOOLCHAIN_URL"
+          # SỬA LỖI: Thêm cờ -L để theo dõi chuyển hướng
+          curl -sL -f $TOOLCHAIN_URL -o clang.tar.gz
+          
+          echo "Extracting Clang to $TOOLCHAIN_DIR"
+          mkdir -p $TOOLCHAIN_DIR
+          # Thêm cờ -z để đảm bảo giải nén được file gzip
+          tar -zxf clang.tar.gz -C $TOOLCHAIN_DIR --strip-components=1
+          
+          # Thiết lập biến môi trường PATH
+          echo "PATH=$PATH:${{ github.workspace }}/$TOOLCHAIN_DIR/bin" >> $GITHUB_ENV
+
+      # BƯỚC 3: Áp dụng Patch SukiSU-Ultra (susfs-main)
       - name: Apply SukiSU-Ultra (susfs-main) Patch
         run: |
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
@@ -42,6 +56,7 @@ jobs:
           scripts/config --enable CONFIG_KALLSYMS
           scripts/config --enable CONFIG_KALLSYMS_ALL
 
+      # BƯỚC 4: Cấu hình Build
       - name: Set up build configuration
         run: |
           export KBUILD_BUILD_USER=thedangcoder
@@ -49,15 +64,16 @@ jobs:
           
           make O=out ARCH=arm64 vendor/marble_defconfig
 
+      # BƯỚC 5: Biên dịch Kernel
       - name: Build Kernel
         run: |
-          export PATH=${{ env.CLANG_BIN }}:$PATH
-          
+          # Biến môi trường PATH đã được thiết lập ở bước 2
           make -j$(nproc) O=out ARCH=arm64 \
             CC=clang \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             LOADADDR=0x40000000 
 
+      # BƯỚC 6: Đóng gói với AnyKernel3
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git -b master AnyKernel3
@@ -74,6 +90,7 @@ jobs:
           cd AnyKernel3
           zip -r9 SukiSU-Marble-$(date +%Y%m%d).zip *
 
+      # BƯỚC 7: Tạo Release trên GitHub
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/heads/main')
