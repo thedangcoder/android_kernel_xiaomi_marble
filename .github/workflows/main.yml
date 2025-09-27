@@ -24,30 +24,19 @@ jobs:
       - name: Setup Dependencies
         run: |
           sudo apt update
-          sudo apt install -y ccache flex bison libssl-dev dpkg-dev libelf-dev xz-utils
+          sudo apt install -y ccache flex bison libssl-dev dpkg-dev libelf-dev xz-utils git
 
-      # BƯỚC 2: Tải và thiết lập Clang Toolchain (r487747c)
-      - name: Download and Setup AOSP Clang Toolchain
+      # BƯỚC 2: Setup Clang Toolchain bằng GitHub mirror
+      - name: Setup Clang Toolchain (r487747c)
         run: |
-          TOOLCHAIN_URL="https://storage.googleapis.com/android-prebuilts/clang/host/linux-x86/clang-r487747c.tar.gz"
-          TOOLCHAIN_DIR="clang"
-
-          echo "Downloading Clang from $TOOLCHAIN_URL"
-          curl -sL -f $TOOLCHAIN_URL -o clang.tar.gz
-
-          echo "Extracting Clang to $TOOLCHAIN_DIR"
-          mkdir -p $TOOLCHAIN_DIR
-          tar -zxf clang.tar.gz -C $TOOLCHAIN_DIR --strip-components=1
-
-          # Thiết lập PATH cho Clang
-          echo "PATH=$PATH:${{ github.workspace }}/$TOOLCHAIN_DIR/bin" >> $GITHUB_ENV
+          echo "Cloning Clang prebuilt from GitHub mirror..."
+          git clone --depth=1 https://github.com/LineageOS/android_prebuilts_clang_host_linux-x86.git clang
+          echo "PATH=$PATH:${{ github.workspace }}/clang/bin" >> $GITHUB_ENV
 
       # BƯỚC 3: Áp dụng Patch SukiSU-Ultra (susfs-main)
       - name: Apply SukiSU-Ultra Patch
         run: |
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/main/kernel/setup.sh" | bash -s susfs-main
-
-          # Bật CONFIG cần thiết (nếu có scripts/config)
           if [ -f scripts/config ]; then
             scripts/config --enable CONFIG_KPM
             scripts/config --enable CONFIG_KALLSYMS
@@ -74,7 +63,6 @@ jobs:
       - name: Package with AnyKernel3
         run: |
           git clone https://github.com/osm0sis/AnyKernel3.git -b master AnyKernel3
-
           if [ -f "out/arch/arm64/boot/Image.gz" ]; then
             cp out/arch/arm64/boot/Image.gz AnyKernel3/Image
           elif [ -f "out/arch/arm64/boot/Image.lz4" ]; then
@@ -85,11 +73,10 @@ jobs:
             echo "Error: Kernel image not found"
             exit 1
           fi
-
           cd AnyKernel3
           zip -r9 SukiSU-Marble-$(date +%Y%m%d).zip *
 
-      # BƯỚC 6.5: Tạo biến short SHA
+      # BƯỚC 6.5: Tạo short SHA
       - name: Set short SHA
         run: echo "SHORT_SHA=$(echo $GITHUB_SHA | cut -c1-7)" >> $GITHUB_ENV
 
