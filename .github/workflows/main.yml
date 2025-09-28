@@ -30,12 +30,9 @@ jobs:
           cd $GITHUB_WORKSPACE/toolchain
 
           echo "Downloading Clang prebuilt r487747c from GitHub mirror..."
-          # Fix: Download from the correct branch 'lineage-21.0'
           curl -L -o clang.tar.gz https://github.com/LineageOS/android_prebuilts_clang_host_linux-x86_clang-r487747c/archive/refs/heads/lineage-21.0.tar.gz
 
-          # Extract the downloaded archive
           tar -xzf clang.tar.gz
-          # Fix: The extracted folder name now includes the branch name
           mv android_prebuilts_clang_host_linux-x86_clang-r487747c-lineage-21.0 clang
 
           echo "CLANG_PATH=$GITHUB_WORKSPACE/toolchain/clang" >> $GITHUB_ENV
